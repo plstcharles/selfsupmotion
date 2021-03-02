@@ -440,9 +440,10 @@ if __name__ == "__main__":
     for batch in tqdm.tqdm(loader, total=len(loader)):
         if display:
             display_frames = []
-            for frame_idx, (frame, pts, pts_3d) in enumerate(zip(batch["OBJ_CROPS"], batch["POINTS"], batch["POINT_3D"])):
+            for frame_idx, (frame, pts) in enumerate(zip(batch["OBJ_CROPS"], batch["POINTS"])):
                 # de-normalize and ready image for opencv display to show the result of transforms
-                frame = (((frame.squeeze(0).numpy().transpose((1, 2, 0)) * norm_std) + norm_mean) * 255).astype(np.uint8)
+                frame = (frame.squeeze(0).numpy().transpose((1, 2, 0)) * norm_std) + norm_mean
+                frame = (frame * 255).astype(np.uint8)
                 for pt_idx, pt in enumerate(pts.view(-1, 2)):
                     pt = (int(round(pt[0].item())), int(round(pt[1].item())))
                     color = (32, 224, 32) if pt_idx == 0 else (32, 32, 224)
