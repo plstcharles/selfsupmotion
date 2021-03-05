@@ -70,12 +70,18 @@ def sort_sample_keypoints(
         # the non-ground keypoints should also all be at the same height (distance)
         ngkpts_dists = kpts_plane_dists[sort_idxs][4:]
         good = good and np.allclose(ngkpts_dists, ngkpts_dists.max(), atol=0.005)
-        # next, check cam dist to identify close/far points
+        # next, check cam dist to identify closest point
         kpts_cam_dists = np.asarray([np.linalg.norm(pt) for pt in kpts3d])
         sort_idxs_bottom, sort_idxs_top = \
             np.argsort(kpts_cam_dists[:4]), np.argsort(kpts_cam_dists[4:])
         kpts2d[:4], kpts3d[:4] = kpts2d[:4][sort_idxs_bottom], kpts3d[:4][sort_idxs_bottom]
         kpts2d[4:], kpts3d[4:] = kpts2d[4:][sort_idxs_top], kpts3d[4:][sort_idxs_top]
+        # next, within the same bottom/top set, find the farthest points and set as last
+        kpts_bottom_gaps = np.asarray([np.linalg.norm(kpts3d[0] - pt) for pt in kpts3d[1:4]])
+        kpts_top_gaps = np.asarray([np.linalg.norm(kpts3d[4] - pt) for pt in kpts3d[5:]])
+        sort_idxs_bottom, sort_idxs_top = np.argsort(kpts_bottom_gaps), np.argsort(kpts_top_gaps)
+        kpts2d[1:4], kpts3d[1:4] = kpts2d[1:4][sort_idxs_bottom], kpts3d[1:4][sort_idxs_bottom]
+        kpts2d[5:], kpts3d[5:] = kpts2d[5:][sort_idxs_top], kpts3d[5:][sort_idxs_top]
         # finally, check 2D left/right assignments and swap pairs if necessary
         if kpts2d[1][0] > kpts2d[2][0]:
             kpts2d[1], kpts2d[2] = kpts2d[2], kpts2d[1].copy()
