@@ -20,7 +20,7 @@ input_height: 224
 tuple_length: 2
 frame_offset: 1
 tuple_offset: 1
-exp_name: pretrain_baseline_sgd
+exp_name: pretrain_baseline_sgd_const_ratio
 gpus: 1
 num_workers: 4
 seed: None
@@ -28,14 +28,11 @@ precision: 16
 early_stop_metric: val_loss
 gaussian_blur: True
 jitter_strength: 1.0
-shared_transform: True
 crop_height: "auto"
 crop_scale_min: 0.5
 crop_scale_max: 1.0
-crop_ratio_min: 0.85
-crop_ratio_max: 1.17
 crop_strategy: centroid
 sync_hflip: True
 keep_only_frames_with_valid_kpts: False
-use_hflip_augment: False
+keep_only_frames_with_valid_ground: False
 resort_keypoints: False

@@ -249,11 +249,12 @@ class SimSiam(pl.LightningModule):
         return sim
 
     def training_step(self, batch, batch_idx):
-        assert len(batch["OBJ_CROPS"]) == 2
-        img_1, img_2 = batch["OBJ_CROPS"]
+        assert batch["OBJ_CROPS"].shape[1] == 2
+        img_1 = batch["OBJ_CROPS"][:, 0, ...]
+        img_2 = batch["OBJ_CROPS"][:, 1, ...]
 
-        uid = batch["UID"]
-        y = batch["CAT_ID"]
+        #uid = batch["UID"]
+        #y = batch["CAT_ID"]
 
         #if self.cuda_train_features is not None:
         #    self.cuda_train_features = None #Free GPU memory
@@ -274,15 +275,16 @@ class SimSiam(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        assert len(batch["OBJ_CROPS"]) == 2
-        img_1, img_2 = batch["OBJ_CROPS"]
+        assert batch["OBJ_CROPS"].shape[1] == 2
+        img_1 = batch["OBJ_CROPS"][:, 0, ...]
+        img_2 = batch["OBJ_CROPS"][:, 1, ...]
 
         # if batch_idx == 0:
         #     if self.cuda_train_features is None: #Transfer to GPU once.
         #        self.cuda_train_features = self.train_features.half().cuda()
 
-        uid = batch["UID"]
-        y = batch["CAT_ID"]
+        #uid = batch["UID"]
+        #y = batch["CAT_ID"]
 
         f1, z1, h1 = self(img_1)
         f2, z2, h2 = self(img_2)
