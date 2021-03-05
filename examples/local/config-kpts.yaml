@@ -28,14 +28,11 @@ early_stop_metric: val_loss
 log_proj_errors: False
 gaussian_blur: True
 jitter_strength: 1.0
-shared_transform: True
 crop_height: "auto"
 crop_scale_min: 0.8
 crop_scale_max: 1.0
-crop_ratio_min: 0.75
-crop_ratio_max: 1.33
 crop_strategy: centroid
-sync_hflip: False
+sync_hflip: True
 keep_only_frames_with_valid_kpts: True
-use_hflip_augment: False
+keep_only_frames_with_valid_ground: True
 resort_keypoints: True

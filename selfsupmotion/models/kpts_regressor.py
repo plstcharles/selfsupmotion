@@ -15,6 +15,8 @@ from torch.optim.optimizer import Optimizer
 from pl_bolts.models.self_supervised.resnets import resnet18, resnet50
 from pl_bolts.optimizers.lars_scheduling import LARSWrapper
 
+import selfsupmotion.models.bpnp
+
 logger = logging.getLogger(__name__)
 
 

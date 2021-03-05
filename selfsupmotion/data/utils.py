@@ -8,7 +8,11 @@ import numpy as np
 import torch.utils.data
 
 
-def project_points(points, projection_matrix, view_matrix, width, height):
+def proj_vec_on_vec(u, v):
+    return (np.dot(u, v) / sum(v ** 2)) * v
+
+
+def project_cam_points(points, projection_matrix, width, height):
     p_3d_cam = np.concatenate((points, np.ones_like(points[:, :1])), axis=-1).T
     p_2d_proj = np.matmul(projection_matrix, p_3d_cam)
     p_2d_ndc = p_2d_proj[:-1, :] / p_2d_proj[-1, :]
@@ -26,6 +30,79 @@ def distance_between_point_and_plane(x1, y1, z1, a, b, c, d):
     d = abs((a * x1 + b * y1 + c * z1 + d))
     e = math.sqrt(a * a + b * b + c * c)
     return d / e
+
+
+def draw_ground_plane(frame, plane_center, plane_normal, proj_matrix):
+    cam_origin = np.asarray((0, 0, 0))
+    forward_cam_vec = np.asarray((0, 0, -1))
+    dot = np.dot(plane_normal, forward_cam_vec)
+    assert abs(dot) > 1e-6
+    offset_to_plane = cam_origin - plane_center
+    offset_length = -np.dot(plane_normal, offset_to_plane) / dot
+    mid_cam_plane_hit = forward_cam_vec * offset_length
+
+    right_offset_vec = proj_vec_on_vec((1, 0, 0), plane_normal)
+    right_plane_vec = np.asarray((1, 0, 0)) - right_offset_vec
+    right_plane_vec_norm = np.linalg.norm(right_plane_vec)
+    assert right_plane_vec_norm > 1e-6
+    right_plane_vec /= right_plane_vec_norm
+
+    top_offset_vec = proj_vec_on_vec((0, 1, 0), plane_normal)
+    top_plane_vec = np.asarray((0, 1, 0)) - top_offset_vec
+    top_plane_vec_norm = np.linalg.norm(top_plane_vec)
+    assert top_plane_vec_norm > 1e-6
+    top_plane_vec /= top_plane_vec_norm
+
+    ground_pts_3d = []
+    for i in range(-100, 100):
+        for j in range(-100, 100):
+            ground_pts_3d.append(  # display dots on 1cm grid
+                mid_cam_plane_hit + top_plane_vec * i / 100 + right_plane_vec * j / 100
+            )
+    ground_pts_2d = project_cam_points(
+        np.asarray(ground_pts_3d), proj_matrix, frame.shape[1], frame.shape[0])
+
+    frame = frame.copy()
+    for pt_2d in ground_pts_2d:
+        if 0 <= pt_2d[0] < frame.shape[1] and 0 <= pt_2d[1] < frame.shape[0]:
+            frame = cv.circle(frame, (int(round(pt_2d[0])), int(round(pt_2d[1]))),
+                              radius=1, color=(255, 255, 0), thickness=-1)
+    return frame
+
+
+def draw_2d_crop_kpts(crop, kpts):
+    crop = crop.copy()
+    line_pair_idxs = [(1, 2), (2, 4), (4, 3), (3, 1)]
+    line_pair_idxs = np.concatenate((
+        line_pair_idxs, np.asarray(line_pair_idxs) + 4))
+    for line_idxs in line_pair_idxs:
+        pt1, pt2 = kpts[line_idxs[0]], kpts[line_idxs[1]]
+        cv.line(
+            crop,
+            (int(round(pt1[0])), int(round(pt1[1]))),
+            (int(round(pt2[0])), int(round(pt2[1]))),
+            (44, 44, 236),
+            thickness=1,
+        )
+    for pt_idx, (pt_x, pt_y) in enumerate(kpts):
+        color = (32, 224, 32) if pt_idx == 0 else (32, 32, 224)
+        pt = (int(round(pt_x)), int(round(pt_y)))
+        crop = cv.circle(crop, pt, radius=3, color=color, thickness=-1)
+        cv.putText(crop, f"{pt_idx}", pt, cv.FONT_HERSHEY_SIMPLEX, 0.5, color)
+    return crop
+
+
+def draw_2d_frame_kpts(frame, kpts, hflipped, scale, offsets, crop_width):
+    real_kpts = []
+    for pt_idx, (pt_x, pt_y) in enumerate(kpts):
+        real_pt = np.asarray((pt_x, pt_y))
+        if hflipped:
+            real_pt[0] = (crop_width - 1) - real_pt[0]
+        real_pt /= scale
+        real_pt += offsets
+        real_pt = (int(round(real_pt[0])), int(round(real_pt[1])))
+        real_kpts.append(real_pt)
+    return draw_2d_crop_kpts(frame, real_kpts)
 
 
 def get_params_hash(*args, **kwargs):

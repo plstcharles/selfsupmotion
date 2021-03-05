@@ -121,6 +121,7 @@ class ObjectronHDF5FrameTupleParser(ObjectronHDF5SequenceParser):
             frame_offset: int = 1,  # by default, we will create tuples from consecutive frames
             tuple_offset: int = 2,  # by default, we will skip a frame between tuples
             keep_only_frames_with_valid_kpts: bool = False,  # set to true when training on kpts
+            keep_only_frames_with_valid_ground: bool = False,  # set to true when training w/ ground plane
             _target_fields: typing.Optional[typing.List[typing.AnyStr]] = None,
             _transforms: typing.Optional[typing.Any] = None,
             _resort_keypoints: bool = False,
@@ -135,6 +136,7 @@ class ObjectronHDF5FrameTupleParser(ObjectronHDF5SequenceParser):
         self.frame_offset = frame_offset
         self.tuple_offset = tuple_offset
         self.keep_only_frames_with_valid_kpts = keep_only_frames_with_valid_kpts
+        self.keep_only_frames_with_valid_ground = keep_only_frames_with_valid_ground
         self.target_fields = self.data_fields if not _target_fields else _target_fields
         self.transforms = _transforms
         cache_path = os.path.join(os.path.dirname(hdf5_path), cache_hash + ".pkl")
@@ -179,6 +181,21 @@ class ObjectronHDF5FrameTupleParser(ObjectronHDF5SequenceParser):
                             good_kpts = np.logical_and(curr_pts_2d <= 1, curr_pts_2d >= 0).all(axis=1)
                             if sum(good_kpts) < 3:
                                 break
+                        if self.keep_only_frames_with_valid_ground:
+                            # check to make sure the bounding box has 4 points sitting on the ground plane
+                            curr_pts_3d = seq_data["POINT_3D"][curr_frame_idx].reshape((-1, 3))[1:]
+                            plane_normal = seq_data["PLANE_NORMAL"][curr_frame_idx]
+                            plane_center = seq_data["PLANE_CENTER"][curr_frame_idx]
+                            plane_d = np.dot(-plane_normal, plane_center)
+                            kpts_plane_dists = np.asarray([
+                                selfsupmotion.data.utils.distance_between_point_and_plane(
+                                    pt[0], pt[1], pt[2],
+                                    plane_normal[0], plane_normal[1], plane_normal[2], plane_d,
+                                ) for pt in curr_pts_3d
+                            ])
+                            kpts_touching_ground = sum([np.isclose(dist, 0., atol=0.005) for dist in kpts_plane_dists])
+                            if kpts_touching_ground != 4:
+                                break
                         candidate_tuple_vals["POINT_2D"].append(np.multiply(curr_pts_2d, seq_image_size))
                         candidate_tuple_vals["frame_idxs"].append(curr_frame_idx)
                     if len(candidate_tuple_vals["frame_idxs"]) == self.tuple_length:  # if it's all good, keep it
@@ -197,6 +214,8 @@ class ObjectronHDF5FrameTupleParser(ObjectronHDF5SequenceParser):
         meta = self.frame_pair_map[idx]
         seq_name = meta["seq_name"]
         seq_data = self.local_fd[seq_name]
+        assert seq_data.attrs["IMAGE_HEIGHT"] == 640 and seq_data.attrs["IMAGE_WIDTH"] == 480
+        assert seq_data.attrs["ORIENTATION"] in ["portrait", "landscape"]
         sample = {
             field: np.stack([
                 self._decode_jpeg(seq_data[field][frame_idx])
@@ -209,9 +228,12 @@ class ObjectronHDF5FrameTupleParser(ObjectronHDF5SequenceParser):
             "SEQ_IDX": seq_name,
             "UID": uid, #TODO: Harmonize Unique Identifiers for evaluation.
             "FRAME_REAL_IDXS": np.asarray([seq_data["IMAGE_ID"][idx] for idx in meta["frame_idxs"]]),
-            "FRAME_IDXS": np.asarray(meta["frame_idxs"]),
+            "FRAME_HDF5_IDXS": np.asarray(meta["frame_idxs"]),
             "POINTS": np.pad(np.asarray(meta["POINT_2D"]), ((0, 0), (0, 0), (0, 2))),  # pad 2d kpts for augments
             "CAT_ID": self.objects.index(seq_name.split("/")[0]),
+            "IS_PORTRAIT": seq_data.attrs["ORIENTATION"] == "portrait",
+            "IMAGE_WIDTH": seq_data.attrs["IMAGE_WIDTH"],
+            "IMAGE_HEIGHT": seq_data.attrs["IMAGE_HEIGHT"],
             **sample,
         }
         if self.transforms is not None:
@@ -233,6 +255,7 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
             frame_offset: int = 1,
             tuple_offset: int = 2,
             keep_only_frames_with_valid_kpts: bool = False,
+            keep_only_frames_with_valid_ground: bool = False,
             input_height: int = 224,
             gaussian_blur: bool = True,
             jitter_strength: float = 1.0,
@@ -242,14 +265,12 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
             split_seed: int = 1337,
             pin_memory: bool = True,
             drop_last: bool = False,
-            use_hflip_augment: bool = True,
-            shared_transform: bool = True,
             crop_height: typing.Union[int, typing.AnyStr] = "auto",
             crop_scale: tuple = (0.2, 1),
-            crop_ratio: tuple = (0.75, 1.33),
             crop_strategy: str = "centroid",
             sync_hflip = False,
             resort_keypoints: bool = False,
+            drop_orig_image: bool = True,
             *args: typing.Any,
             **kwargs: typing.Any,
     ):
@@ -264,19 +285,18 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
         self.frame_offset = frame_offset
         self.tuple_offset = tuple_offset
         self.keep_only_frames_with_valid_kpts = keep_only_frames_with_valid_kpts
+        self.keep_only_frames_with_valid_ground = keep_only_frames_with_valid_ground
         self.num_workers = num_workers
         self.batch_size = batch_size
         self.split_seed = split_seed if split_seed is not None else 1337  # keep this static between runs
         self.pin_memory = pin_memory
         self.drop_last = drop_last
-        self.use_hflip_augment = use_hflip_augment
-        self.shared_transform = shared_transform
         self.crop_height = crop_height
         self.crop_scale = crop_scale
-        self.crop_ratio = crop_ratio
         self.crop_strategy = crop_strategy
         self.sync_hflip = sync_hflip
         self.resort_keypoints = resort_keypoints
+        self.drop_orig_image = drop_orig_image
         # create temp dataset to get total sequence/sample count
         dataset = ObjectronHDF5FrameTupleParser(
             hdf5_path=self.hdf5_path,
@@ -285,6 +305,7 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
             frame_offset=self.frame_offset,
             tuple_offset=self.tuple_offset,
             keep_only_frames_with_valid_kpts=self.keep_only_frames_with_valid_kpts,
+            keep_only_frames_with_valid_ground=self.keep_only_frames_with_valid_ground,
         )
         # we do the split in a 2nd pass and re-parse the subsets
         # ...caching will be 2x longer, but it's the easiest solution, and it costs ~5 minutes once
@@ -315,6 +336,7 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
             "IMAGE", "CENTROID_2D_IM", "POINT_3D",
             "PROJECTION_MATRIX", "VIEW_MATRIX",
             "PLANE_CENTER", "PLANE_NORMAL",
+            "EXTRINSIC_MATRIX", "INTRINSIC_MATRIX",
         ]
         self.val_dataset = ObjectronHDF5FrameTupleParser(
             hdf5_path=self.hdf5_path,
@@ -323,6 +345,7 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
             frame_offset=self.frame_offset,
             tuple_offset=self.tuple_offset,
             keep_only_frames_with_valid_kpts=self.keep_only_frames_with_valid_kpts,
+            keep_only_frames_with_valid_ground=self.keep_only_frames_with_valid_ground,
             _target_fields=target_fields,
             _transforms=self.val_transforms,
             _resort_keypoints=self.resort_keypoints,
@@ -334,6 +357,7 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
             frame_offset=self.frame_offset,
             tuple_offset=self.tuple_offset,
             keep_only_frames_with_valid_kpts=self.keep_only_frames_with_valid_kpts,
+            keep_only_frames_with_valid_ground=self.keep_only_frames_with_valid_ground,
             _target_fields=target_fields,
             _transforms=self.train_transforms,
             _resort_keypoints=self.resort_keypoints,
@@ -363,32 +387,29 @@ class ObjectronFramePairDataModule(pytorch_lightning.LightningDataModule):
         )
 
     def train_transform(self):
-        return selfsupmotion.data.objectron.data_transforms.SimSiamFramePairTrainDataTransform(
+        return selfsupmotion.data.objectron.data_transforms.SimSiamFramePairDataTransform(
             crop_height=self.crop_height,
             input_height=self.image_size,
             gaussian_blur=self.gaussian_blur,
             jitter_strength=self.jitter_strength,
+            drop_orig_image=self.drop_orig_image,
             crop_scale=self.crop_scale,
-            crop_ratio=self.crop_ratio,
-            use_hflip_augment=self.use_hflip_augment,
-            shared_transform=self.shared_transform,
+            augmentation=True,
             crop_strategy=self.crop_strategy,
             sync_hflip=self.sync_hflip
         )
 
     def val_transform(self):
-        return selfsupmotion.data.objectron.data_transforms.SimSiamFramePairEvalDataTransform(
+        return selfsupmotion.data.objectron.data_transforms.SimSiamFramePairDataTransform(
             crop_height=self.crop_height,
             input_height=self.image_size,
             gaussian_blur=self.gaussian_blur,
             jitter_strength=self.jitter_strength,
+            drop_orig_image=self.drop_orig_image,
             crop_scale=self.crop_scale,
-            crop_ratio=self.crop_ratio,
-            use_hflip_augment=self.use_hflip_augment,
-            shared_transform=self.shared_transform,
+            augmentation=False,
             crop_strategy=self.crop_strategy,
             sync_hflip=self.sync_hflip,
-            augmentation=False,
         )
 
 
@@ -398,7 +419,7 @@ if __name__ == "__main__":
     config_path = "/home/perf6/dev/selfsupmotion/examples/local/config-kpts.yaml"
     display_keypoints = True
     batch_size = 1
-    max_iters = 50
+    max_iters = 100000
 
     import yaml
     with open(config_path, "r") as stream:
@@ -414,16 +435,15 @@ if __name__ == "__main__":
         frame_offset=hyper_params.get("frame_offset"),
         tuple_offset=hyper_params.get("tuple_offset"),
         keep_only_frames_with_valid_kpts=hyper_params.get("keep_only_frames_with_valid_kpts"),
+        keep_only_frames_with_valid_ground=hyper_params.get("keep_only_frames_with_valid_ground"),
         input_height=hyper_params.get("input_height"),
         gaussian_blur=hyper_params.get("gaussian_blur"),
         jitter_strength=hyper_params.get("jitter_strength"),
         batch_size=batch_size,
         num_workers=0,
-        use_hflip_augment=hyper_params.get("use_hflip_augment"),
-        shared_transform=hyper_params.get("shared_transform"),
+        drop_orig_image=False,
         crop_height=hyper_params.get("crop_height"),
         crop_scale=(hyper_params.get("crop_scale_min"), hyper_params.get("crop_scale_max")),
-        crop_ratio=(hyper_params.get("crop_ratio_min"), hyper_params.get("crop_ratio_max")),
         crop_strategy=hyper_params.get("crop_strategy"),
         sync_hflip=hyper_params.get("sync_hflip"),
         resort_keypoints=hyper_params.get("resort_keypoints"),
@@ -437,28 +457,51 @@ if __name__ == "__main__":
 
     iter = 0
     init_time = time.time()
-    for batch in tqdm.tqdm(loader, total=len(loader)):
+    for batch_idx, batch in enumerate(tqdm.tqdm(loader, total=len(loader))):
         if display:
-            display_frames = []
-            for frame_idx, (frame, pts) in enumerate(zip(batch["OBJ_CROPS"], batch["POINTS"])):
+            # if we get here, batch size is one, but we still have to unpack the tuple below
+            sample_idx = 0
+            display_frames, display_crops = [], []
+            for frame_idx in range(len(batch["OBJ_CROPS"])):
+                if not batch["IS_PORTRAIT"][sample_idx].item():
+                    print("orly")
+                pts = batch["POINTS"][sample_idx][frame_idx].reshape((9, 2)).numpy()
+                pts_3d = batch["POINT_3D"][sample_idx][frame_idx].reshape((9, 3)).numpy()
+                cam_intrinsics = batch["INTRINSIC_MATRIX"][sample_idx][frame_idx].reshape((3, 3)).numpy()
                 # de-normalize and ready image for opencv display to show the result of transforms
-                frame = (frame.squeeze(0).numpy().transpose((1, 2, 0)) * norm_std) + norm_mean
-                frame = (frame * 255).astype(np.uint8)
-                for pt_idx, pt in enumerate(pts.view(-1, 2)):
-                    pt = (int(round(pt[0].item())), int(round(pt[1].item())))
-                    color = (32, 224, 32) if pt_idx == 0 else (32, 32, 224)
-                    frame = cv.circle(frame.copy(), pt, radius=3, color=color, thickness=-1)
-                    cv.putText(frame, f"{pt_idx}", pt, cv.FONT_HERSHEY_SIMPLEX, 0.5, color)
-                display_frames.append(frame)
-            print(f"sorting_good = {batch['sorting_good']}")
-            cv.imshow(
-                f"frames",
+                crop = batch["OBJ_CROPS"][sample_idx][frame_idx].squeeze(0).numpy().transpose((1, 2, 0))
+                crop = (((crop * norm_std) + norm_mean) * 255).astype(np.uint8)
+                frame = batch["IMAGE"][sample_idx][frame_idx].numpy()  # no need to denorm this one, it's the og
+                frame = selfsupmotion.data.utils.draw_ground_plane(
+                    frame,
+                    batch["PLANE_CENTER"][sample_idx][frame_idx].numpy(),
+                    batch["PLANE_NORMAL"][sample_idx][frame_idx].numpy(),
+                    batch["PROJECTION_MATRIX"][sample_idx][frame_idx].numpy().reshape((4, 4)),
+                )
+                display_crops.append(selfsupmotion.data.utils.draw_2d_crop_kpts(crop, pts))
+                display_frames.append(selfsupmotion.data.utils.draw_2d_frame_kpts(
+                    frame,
+                    pts,
+                    batch["OBJ_CROPS_HFLIPPED"][sample_idx][frame_idx].item(),
+                    batch["OBJ_CROPS_SCALE"][sample_idx][frame_idx].item(),
+                    batch["OBJ_CROPS_OFFSETS"][sample_idx][frame_idx].numpy(),
+                    crop.shape[1],
+                ))
+
+            cv.imshow("frames",
                 cv.resize(
                     cv.hconcat(display_frames),
+                    dsize=(-1, -1), fx=2, fy=2, interpolation=cv.INTER_NEAREST,
+                )
+            )
+            cv.imshow("crops",
+                cv.resize(
+                    cv.hconcat(display_crops),
                     dsize=(-1, -1), fx=4, fy=4, interpolation=cv.INTER_NEAREST,
                 )
             )
             cv.waitKey(0)
+
         iter += 1
         if max_iters is not None and iter > max_iters:
             break
