@@ -17,20 +17,18 @@ tuple_offset: 1
 patience: 10
 max_epoch: 25
 image_size: 224
-exp_name: pretrain_224_synchflip_less_aug
+exp_name: pretrain_224_synchflip
 gpus: 1
 num_workers: 16
 seed: None
 precision: 16
-early_stop_metric: val_accuracy
+early_stop_metric: none
 shared_transform: False
 crop_scale_min: 0.6
 crop_scale_max: 1.4
 crop_ratio_min: 1
 crop_ratio_max: 1
-val_augmentation: False
 crop_strategy: bbox
 sync_hflip: True 
 jitter_strength: 0.5
-
 

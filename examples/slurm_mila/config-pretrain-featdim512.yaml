@@ -8,8 +8,8 @@ lars_wrapper: False
 temperature: 0.1
 architecture: simsiam
 backbone: resnet50
-hidden_mlp: 512
-feat_dim: 2048
+hidden_mlp: 128
+feat_dim: 512
 input_height: 224
 tuple_length: 2
 frame_offset: 1
@@ -17,20 +17,18 @@ tuple_offset: 1
 patience: 10
 max_epoch: 25
 image_size: 224
-exp_name: pretrain_224_synchflip_less_aug
+exp_name: pretrain_224_synchflip
 gpus: 1
 num_workers: 16
 seed: None
 precision: 16
-early_stop_metric: val_accuracy
+early_stop_metric: none
 shared_transform: False
-crop_scale_min: 0.6
-crop_scale_max: 1.4
-crop_ratio_min: 1
-crop_ratio_max: 1
-val_augmentation: False
+crop_scale_min: 0.2
+crop_scale_max: 1.0
+crop_ratio_min: 0.75
+crop_ratio_max: 1.33
 crop_strategy: bbox
 sync_hflip: True 
 jitter_strength: 0.5
-
 

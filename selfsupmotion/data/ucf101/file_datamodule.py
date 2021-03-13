@@ -59,27 +59,29 @@ class UCF101Dataset(torch.utils.data.Dataset):
         self.number_of_pictures = 0
 
         self.sequences_by_categories = {}
+        self.seq_subset = []
         for category in self.categories:
             sequences = self._get_sequences(category, self.split)
             self.sequences_by_categories[category] = sequences
+            self.seq_subset+=sequences
 
         self._load_samples(self.split)
 
         if debug_subset_size is not None:
             self.samples = random.sample(self.samples, debug_subset_size)     
 
-    def _get_sequences(self, category, split="train"):
+    def _get_sequences(self, category, split="train", fold=1):
     
         if split == 'train':
             partition = 'train'
-            splitIndices = [1, 2]
+            splitIndices = [fold]
         elif split == 'valid':
             # NOTE: use the third split as validation set
-            partition = 'train'
-            splitIndices = [3]
-        elif split == 'test':
             partition = 'test'
-            splitIndices = [1, 2, 3]
+            splitIndices = [fold]
+        #elif split == 'test':
+        #    partition = 'test'
+        #    splitIndices = [1, 2, 3]
         else:
             raise ValueError(f"Unsupported split: {split}")
 
@@ -213,7 +215,7 @@ class UCF101Dataset(torch.utils.data.Dataset):
 UCF101_PATH = "datasets/ucf101/112x112/"
 
 class UCF101FileDataModule(pytorch_lightning.LightningDataModule):
-    def __init__(self, data_dir: str = UCF101_PATH, batch_size=512, image_size=112, num_workers=6, pairing="next", dryrun=False):
+    def __init__(self, data_dir: str = UCF101_PATH, batch_size=512, image_size=112, num_workers=16, pairing="next", dryrun=False):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
@@ -229,7 +231,7 @@ class UCF101FileDataModule(pytorch_lightning.LightningDataModule):
             self.eval_transform = self.get_ucf101_transform(self.image_size, evaluation=True)
             self.train_dataset = UCF101Dataset(self.data_dir, split="train", transform=self.train_transform, pair=self.pairing)
             self.val_dataset = UCF101Dataset(self.data_dir, split="valid", transform=self.eval_transform, pair=self.pairing)
-            self.test_dataset = UCF101Dataset(self.data_dir, split="test", transform=self.eval_transform, pair=self.pairing)
+            #self.test_dataset = UCF101Dataset(self.data_dir, split="test", transform=self.eval_transform, pair=self.pairing)
             self.train_sample_count = len(self.train_dataset)
             self.valid_sample_count = len(self.val_dataset)
             self.issetup=True
@@ -238,7 +240,7 @@ class UCF101FileDataModule(pytorch_lightning.LightningDataModule):
         if not evaluation:
             p_blur = 0.5 if image_size > 32 else 0 
             transform_list = [
-                T.RandomResizedCrop(image_size, scale=(0.2, 1.0)),
+                T.RandomResizedCrop(image_size, scale=(0.6, 1.4)),
                 T.RandomApply([T.ColorJitter(0.4,0.4,0.4,0.1)], p=0.8),
                 T.RandomGrayscale(p=0.2),
                 T.RandomApply([T.GaussianBlur(kernel_size=image_size//20*2+1, sigma=(0.1, 2.0))], p=p_blur),
