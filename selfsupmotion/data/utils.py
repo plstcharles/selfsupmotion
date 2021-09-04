@@ -147,10 +147,33 @@ class ConstantRandomOrderSampler(torch.utils.data.Sampler[int]):
         return len(self.data_source)
 
 
-def decode_jpeg(data):
+def decode_jpeg(
+    data: bytes,
+    convert_to_rgb: bool = True,
+) -> np.ndarray:
     if turbojpeg is not None:
         image = turbojpeg.decode(data)
     else:
         image = cv.imdecode(data, cv.IMREAD_COLOR)
-    image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+    if convert_to_rgb:
+        image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
     return image
+
+
+def encode_jpeg(
+    data: np.ndarray,
+    quality: int = 90,
+) -> bytes:
+    if turbojpeg is not None:
+        return turbojpeg.encode(data, quality=quality)
+    else:
+        retval, data = cv.imencode(
+            ".jpg",
+            data,
+            params=(
+                cv.IMWRITE_JPEG_OPTIMIZE, 1,
+                cv.IMWRITE_JPEG_QUALITY, quality,
+            ),
+        )
+        assert retval
+        return data
