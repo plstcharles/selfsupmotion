@@ -7,6 +7,12 @@ import cv2 as cv
 import numpy as np
 import torch.utils.data
 
+try:
+    import turbojpeg
+    turbojpeg = turbojpeg.TurboJPEG()
+except ImportError:
+    turbojpeg = None
+
 
 def project_points(points, projection_matrix, view_matrix, width, height):
     p_3d_cam = np.concatenate((points, np.ones_like(points[:, :1])), axis=-1).T
@@ -139,3 +145,12 @@ class ConstantRandomOrderSampler(torch.utils.data.Sampler[int]):
 
     def __len__(self) -> int:
         return len(self.data_source)
+
+
+def decode_jpeg(data):
+    if turbojpeg is not None:
+        image = turbojpeg.decode(data)
+    else:
+        image = cv.imdecode(data, cv.IMREAD_COLOR)
+    image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+    return image

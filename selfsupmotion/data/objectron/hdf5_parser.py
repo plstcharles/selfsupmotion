@@ -14,15 +14,8 @@ import h5py
 import numpy as np
 import pickle
 import pytorch_lightning
-from torch import tensor
 import torch.utils.data
 import tqdm
-
-try:
-    import turbojpeg
-    turbojpeg = turbojpeg.TurboJPEG()
-except ImportError:
-    turbojpeg = None
 
 import selfsupmotion.data.objectron.data_transforms
 import selfsupmotion.data.objectron.sequence_parser
@@ -89,15 +82,6 @@ class ObjectronHDF5SequenceParser(torch.utils.data.Dataset):
         # in short, if any centroid is outside the image frame by more than its size, it's bad
         # (this will catch crazy-bad object coordinates that would lead to insanely big crops)
         return -640 < im_coords[0] < 1280 and -480 < im_coords[1] < 960
-
-    @staticmethod
-    def _decode_jpeg(data):
-        if turbojpeg is not None:
-            image = turbojpeg.decode(data)
-        else:
-            image = cv.imdecode(data, cv.IMREAD_COLOR)
-        image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-        return image
 
 
 class ObjectronHDF5FrameTupleParser(ObjectronHDF5SequenceParser):
@@ -200,7 +184,7 @@ class ObjectronHDF5FrameTupleParser(ObjectronHDF5SequenceParser):
         seq_data = self.local_fd[seq_name]
         sample = {
             field: np.stack([
-                self._decode_jpeg(seq_data[field][frame_idx])
+                selfsupmotion.data.utils.decode_jpeg(seq_data[field][frame_idx])
                 if field == "IMAGE" else seq_data[field][frame_idx]
                 for frame_idx in meta["frame_idxs"]
             ]) for field in self.target_fields
