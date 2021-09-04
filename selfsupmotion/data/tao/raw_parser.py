@@ -12,7 +12,7 @@ import selfsupmotion.data.tao.utils as tao_utils
 logger = logging.getLogger(__name__)
 
 
-class TAORawVideoParser(tao_utils.TAOVideoParserBase):
+class TAOVideoParser(tao_utils.TAOVideoParserBase):
 
     def __init__(
         self,
@@ -20,6 +20,7 @@ class TAORawVideoParser(tao_utils.TAOVideoParserBase):
         video_info: typing.Dict,
         dataset_info: typing.Dict,
         dataset_zip_fd: zipfile.ZipFile,
+        import_only_annot_frames: bool,
         convert_to_rgb: bool,
     ):
         super().__init__(
@@ -31,6 +32,7 @@ class TAORawVideoParser(tao_utils.TAOVideoParserBase):
             neg_category_ids=video_info["neg_category_ids"],
             not_exhaustive_category_ids=video_info["not_exhaustive_category_ids"],
         )
+        self.import_only_annot_frames = import_only_annot_frames
 
         # next, assign the reverse-lookup maps to fetch annotations/tracks/images based on their IDs
         self.categories_info = {cid: dataset_info["categories"][cid] for cid in self.not_exhaustive_category_ids}
@@ -63,6 +65,7 @@ class TAORawVideoParser(tao_utils.TAOVideoParserBase):
         else:
             frame_paths = in_zip_frame_paths  # and this one slower? (yep: 75% slower on HDD)
         assert len(frame_paths) > 0
+        real_frame_idxs = list(range(len(frame_paths)))
 
         # next, update the 'frame_index' stored in the image metadata to 0-based
         for iid, iinfo in self.images_info.items():
@@ -73,19 +76,19 @@ class TAORawVideoParser(tao_utils.TAOVideoParserBase):
             iinfo["frame_idx"] = real_frame_idx  # this is how we'll map real frame indices below
 
         # next, we need a way to map real frame indices to corresponding annotations, so let's create a temp map
-        frame_idx_to_annotation_ids_map = {idx: [] for idx in range(len(frame_paths))}
+        frame_idx_to_annotation_ids_map = {idx: [] for idx in real_frame_idxs}
         for aid, annot in self.annotations_info.items():
             image_info = self.images_info[annot["image_id"]]
             real_frame_idx = image_info["frame_idx"]
             frame_idx_to_annotation_ids_map[real_frame_idx].append(aid)
 
         # we'll create the map of metadata that contains all relevant info for each frame
-        frames_metadata = [  # initialize basic metadata w/ empty tracks map
-            {
+        frames_metadata_map = {
+            real_frame_idx: { # initialize basic metadata w/ empty tracks map
                 "image_data": None,  # will only be filled at runtime
                 "image_id": None,  # will be filled below if there is a match
-                "image_path": frame_paths[idx],
-                "frame_idx": idx,
+                "image_path": frame_paths[real_frame_idx],
+                "frame_idx": real_frame_idx,
                 "tracks": {
                     tid: {
                         # some categories do not have associated info; sad, but it's not world-ending
@@ -96,45 +99,53 @@ class TAORawVideoParser(tao_utils.TAOVideoParserBase):
                         "annotation": None,
                     } for tid in self.tracks_info
                 },
-            } for idx in range(len(frame_paths))
-        ]
+            } for real_frame_idx in real_frame_idxs
+        }
 
-        # finally, re-run for each frame and fill in with the available info based on all maps
+        # finally, re-run for each frame and fill/pop with respect to available annotations
         track_latest_updates = {track_id: None for track_id in self.tracks_info}
-        target_annot_keys = ["segmentation", "bbox", "area", "iscrowd"]
-        for frame_idx in range(len(frames_metadata)):
+        for frame_idx in real_frame_idxs:
             curr_frame_annot_ids = frame_idx_to_annotation_ids_map[frame_idx]
             if curr_frame_annot_ids:
                 matched_image_ids = np.unique([
                     self.annotations_info[aid]["image_id"] for aid in curr_frame_annot_ids
                 ])
                 assert len(matched_image_ids) == 1
-                frames_metadata[frame_idx]["image_id"] = int(matched_image_ids[0])
+                frame_dict = frames_metadata_map[frame_idx]
+                frame_dict["image_id"] = int(matched_image_ids[0])
                 assert self.images_info[matched_image_ids[0]]["frame_idx"] == frame_idx
                 for aid in curr_frame_annot_ids:
                     annot_info = self.annotations_info[aid]
                     track_id = annot_info["track_id"]
-                    frames_metadata[frame_idx]["tracks"][track_id]["annotation"] = {
-                        key: annot_info[key] for key in target_annot_keys
+                    track_dict = frame_dict["tracks"][track_id]
+                    track_dict["last_annotation_frame_idx"] = track_latest_updates[track_id]
+                    track_dict["annotation"] = {
+                        key: annot_info[key] for key in tao_utils.annotation_attributes
                     }
                     last_update = track_latest_updates[track_id]
                     assert last_update is None or last_update < frame_idx
                     track_latest_updates[track_id] = frame_idx
+                    assert all([key in track_dict for key in tao_utils.track_attributes])
+                assert all([key in frame_dict for key in tao_utils.frame_attributes])
+            elif self.import_only_annot_frames:
+                del frames_metadata_map[frame_idx]
 
-        return frames_metadata
+        return list(frames_metadata_map.values())
 
-    def _load_frame_data(self, frame_data: typing.Dict):
-        frame_path = frame_data["image_path"]
+    def _load_frame_data(
+        self,
+        frame_idx: int,
+            frame_dict: typing.Dict[typing.AnyStr, typing.Any],
+    ):
+        frame_path = frame_dict["image_path"]
         if self.can_load_images_directly:
             with open(frame_path, "rb") as fd:
-                image_data = data_utils.decode_jpeg(
-                    data=fd.read(),
-                    convert_to_rgb=self.convert_to_rgb,
-                )
+                image_buffer = fd.read()
         else:
-            image_data = data_utils.decode_jpeg(
-                data=self.dataset_zip_fd.read(frame_path),
-                convert_to_rgb=self.convert_to_rgb,
-            )
+            image_buffer = self.dataset_zip_fd.read(frame_path)
+        image_data = data_utils.decode_jpeg(
+            data=image_buffer,
+            convert_to_rgb=self.convert_to_rgb,
+        )
         assert image_data.shape == (self.height, self.width, 3)
-        frame_data["image_data"] = image_data
+        frame_dict["image_data"] = image_data

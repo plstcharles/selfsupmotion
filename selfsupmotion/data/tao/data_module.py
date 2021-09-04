@@ -5,11 +5,13 @@ import os
 import typing
 import zipfile
 
+import h5py
 import numpy as np
 import tqdm
 
 import selfsupmotion.data.tao.utils as tao_utils
 import selfsupmotion.data.tao.raw_parser as raw_parser
+import selfsupmotion.data.tao.hdf5_parser as hdf5_parser
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,8 @@ class TAODataModule:
     def __init__(
         self,
         data_root_path: typing.AnyStr,
+        use_hdf5_packages: bool,
+        import_only_annot_frames: bool,
         skip_private_datasets: bool,
         load_train: bool = True,
         load_valid: bool = True,
@@ -27,46 +31,101 @@ class TAODataModule:
     ):
         assert load_train or load_valid or load_test
         logger.info(f"Data module initializing at: {data_root_path}")
-        self.data_root_path = data_root_path
         assert os.path.isdir(data_root_path)
-        self.train_video_parsers = self._create_video_parsers(
-            data_root_path=self.data_root_path,
-            prefix="train",
-            skip_private_datasets=skip_private_datasets,
-            convert_to_rgb=convert_to_rgb,
-        ) if load_train else []
-        self.valid_video_parsers = self._create_video_parsers(
-            data_root_path=self.data_root_path,
-            prefix="valid",
-            skip_private_datasets=skip_private_datasets,
-            convert_to_rgb=convert_to_rgb,
-        ) if load_valid else []
-        self.test_video_parsers = self._create_video_parsers(
-            data_root_path=self.data_root_path,
-            prefix="test",
-            skip_private_datasets=skip_private_datasets,
-            convert_to_rgb=convert_to_rgb,
-        ) if load_test else []
-        logger.info("Verifying split overlap...")
-        self._verify_split_overlap((
-            self.train_video_parsers,
-            self.valid_video_parsers,
-            self.test_video_parsers,
-        ))
+        self.data_root_path = data_root_path
+        self.use_hdf5_packages = use_hdf5_packages
+        self.import_only_annot_frames = import_only_annot_frames
+        self.skip_private_datasets = skip_private_datasets
+        self.load_train, self.load_valid, self.load_test = load_train, load_valid, load_test
+        self.convert_to_rgb = convert_to_rgb
+        self.train_parsers, self.valid_parsers, self.test_parsers = [], [], []
+        self._reload_parsers()
         logger.info("Data module ready.")
 
-    @staticmethod
-    def _create_video_parsers(
-        data_root_path: typing.AnyStr,
-        prefix: typing.AnyStr,
-        skip_private_datasets: bool,
-        convert_to_rgb: bool,
-    ):
+    def _reload_parsers(self):
+        self.train_parsers = self._create_video_parsers(prefix="train") if self.load_train else []
+        self.valid_parsers = self._create_video_parsers(prefix="valid") if self.load_valid else []
+        self.test_parsers = self._create_video_parsers(prefix="test") if self.load_test else []
+        self._verify_split_overlap((
+            self.train_parsers,
+            self.valid_parsers,
+            self.test_parsers,
+        ))
+
+    def _create_video_parsers(self, prefix: typing.AnyStr):
+        if self.import_only_annot_frames and prefix == "test":
+            return []
         logger.info(f"Parsing {prefix} split...")
+        if self.use_hdf5_packages:
+            hdf5_file_name = tao_utils.get_hdf5_file_name_from_prefix(prefix, self.import_only_annot_frames)
+            hdf5_file_path = os.path.join(self.data_root_path, hdf5_file_name)
+            video_parsers = TAODataModule._create_hdf5_video_parsers(
+                hdf5_file_path=hdf5_file_path,
+                skip_private_datasets=self.skip_private_datasets,
+                prefix=prefix,
+                convert_to_rgb=self.convert_to_rgb,
+            )
+        else:
+            annot_root_path = os.path.join(self.data_root_path, "annotations")
+            assert os.path.isdir(annot_root_path)
+            annot_file_path = os.path.join(annot_root_path, tao_utils.get_annot_file_name_from_prefix(prefix))
+            zip_file_path = os.path.join(self.data_root_path, tao_utils.get_parent_zip_name_from_prefix(prefix))
+            assert zipfile.is_zipfile(zip_file_path)
+            video_parsers = TAODataModule._create_raw_video_parsers(
+                data_root_path=self.data_root_path,
+                annot_file_path=annot_file_path,
+                zip_file_path=zip_file_path,
+                import_only_annot_frames=self.import_only_annot_frames,
+                skip_private_datasets=self.skip_private_datasets,
+                prefix=prefix,
+                convert_to_rgb=self.convert_to_rgb,
+            )
+        if not self.skip_private_datasets:
+            assert any([any([k in p.name for k in tao_utils.private_dataset_names]) for p in video_parsers])
+        assert len(np.unique([v.id for v in video_parsers])) == len(video_parsers)
+        return video_parsers
+
+    @staticmethod
+    def _create_hdf5_video_parsers(
+        hdf5_file_path: typing.AnyStr,
+        skip_private_datasets: bool,
+        prefix: typing.AnyStr,
+        convert_to_rgb: bool,
+    ) -> typing.Sequence[tao_utils.TAOVideoParserBase]:
+        with h5py.File(hdf5_file_path) as h5fd:  # sneak-peek for video count
+            hdf5_video_count = h5fd.attrs["video_count"]
+        video_parsers = []
+        iterator = tqdm.tqdm(list(range(hdf5_video_count)), desc="Fetching HDF5 video metadata")
+        for video_idx in iterator:
+            parser = hdf5_parser.TAOVideoParser(
+                hdf5_file_path=hdf5_file_path,
+                video_idx=video_idx,
+                convert_to_rgb=convert_to_rgb,
+            )
+            assert len(parser) > 0
+            if skip_private_datasets:
+                if parser.metadata["dataset"] in tao_utils.private_dataset_names:
+                    continue
+            if len(parser.annotations_info) == 0 and prefix in ["train", "valid"]:
+                logger.warning(f"no annotation found for video: {parser.name}")
+                continue  # we skip these videos since they cannot be used for anything
+            video_parsers.append(parser)
+        return video_parsers
+
+    @staticmethod
+    def _create_raw_video_parsers(
+        data_root_path: typing.AnyStr,
+        annot_file_path: typing.AnyStr,
+        zip_file_path: typing.AnyStr,
+        import_only_annot_frames: bool,
+        skip_private_datasets: bool,
+        prefix: typing.AnyStr,
+        convert_to_rgb: bool,
+    ) -> typing.Sequence[tao_utils.TAOVideoParserBase]:
+        if import_only_annot_frames and prefix == "test":
+            return []
+
         # first, open the JSON file that contains all the annotations for the specified split
-        annot_root_path = os.path.join(data_root_path, "annotations")
-        assert os.path.isdir(annot_root_path)
-        annot_file_path = os.path.join(annot_root_path, tao_utils.get_annot_file_name_from_prefix(prefix))
         logger.info(f"\tLoading annotations from: {annot_file_path}")
         assert os.path.isfile(annot_file_path)
         with open(annot_file_path, "r") as fd:
@@ -76,51 +135,29 @@ class TAODataModule:
 
         # next, open the zip & get ready to parse all the metadata from the JSON+zip simultaneously
         video_parsers = []
-        zip_path = os.path.join(data_root_path, tao_utils.get_parent_zip_name_from_prefix(prefix))
-        assert zipfile.is_zipfile(zip_path)
-        logger.info(f"\tParsing content for zip file: {zip_path}")
+        logger.info(f"\tParsing content for zip file: {zip_file_path}")
         # note: zip will stay opened in memory until all parsers are destroyed!
         # (should not be big enough to cause issues though)
-        zfd = zipfile.ZipFile(zip_path, "r")
+        zfd = zipfile.ZipFile(zip_file_path, "r")
         logger.info(f"\tCreating video parsers...")
         iterator = tqdm.tqdm(dataset_info["videos"], desc="Fetching video metadata")
-        for vidx, video_info in enumerate(iterator): #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        for video_info in iterator:  # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
             if skip_private_datasets:
                 if video_info["metadata"]["dataset"] in tao_utils.private_dataset_names:
                     continue
-            if vidx > 10:  # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                break
-            parser = raw_parser.TAORawVideoParser(
+            parser = raw_parser.TAOVideoParser(
                 data_root_path=data_root_path,
                 video_info=video_info,
                 dataset_info=dataset_info,
                 dataset_zip_fd=zfd,
+                import_only_annot_frames=import_only_annot_frames,
                 convert_to_rgb=convert_to_rgb,
             )
             assert len(parser) > 0
             if len(parser.annotations_info) == 0 and prefix in ["train", "valid"]:
                 logger.warning(f"no annotation found for video: {video_info['name']}")
                 continue  # we skip these videos since they cannot be used for anything
-            # import cv2 as cv
-            # for frame_idx in range(len(parser)):
-            #     frame_data = parser[frame_idx]
-            #     got_gt = False
-            #     for tid, track_info in frame_data["tracks"].items():
-            #         if track_info["annotation"]:
-            #             bbox = track_info["annotation"]["bbox"]
-            #             cv.rectangle(
-            #                 frame_data["image_data"],
-            #                 pt1=(bbox[0], bbox[1]),
-            #                 pt2=(bbox[0] + bbox[2], bbox[1] + bbox[3]),
-            #                 color=(112, 112, 255),
-            #                 thickness=1,
-            #             )
-            #             got_gt = True
-            #     image = cv.resize(image, dsize=(-1, -1), fx=4, fy=4, interpolation=cv.INTER_NEAREST)
-            #     cv.imshow("test", image)
-            #     cv.waitKey(0 if got_gt else 1)
             video_parsers.append(parser)
-        assert len(np.unique([v.id for v in video_parsers])) == len(video_parsers)
         return video_parsers
 
     @staticmethod

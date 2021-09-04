@@ -3,6 +3,7 @@ import os
 import typing
 
 
+supported_compression_types = ["jpg", "gzip", "lzf", "none", None]  # add lz4? add a video codec?
 private_dataset_names = ["AVA", "HACS"]
 
 
@@ -28,6 +29,15 @@ def get_annot_file_name_from_prefix(prefix: typing.AnyStr):
     raise NotImplementedError
 
 
+def get_hdf5_file_name_from_prefix(
+    prefix: typing.AnyStr,
+    import_only_annot_frames: bool,
+) -> typing.AnyStr:
+    """Returns the name of the hdf5 video sequence pack for the given split suffix & content type."""
+    only_annot_str = "_subsampl" if import_only_annot_frames else ""
+    return f"tao_{prefix}{only_annot_str}.hdf5"
+
+
 def check_if_images_are_on_disk(
     data_root_path: typing.AnyStr,
     rel_dir_path: typing.AnyStr,
@@ -42,7 +52,7 @@ def check_if_images_are_on_disk(
     return len(image_paths) > 0 and all([os.path.isfile(p) for p in image_paths])
 
 
-video_metadata_fields = [
+video_attributes = [
     # from the dataset itself
     "id", "name", "metadata", "width", "height", "neg_category_ids", "not_exhaustive_category_ids",
     # defined internally, for debugging/speedup
@@ -50,6 +60,30 @@ video_metadata_fields = [
     # and the main lovebite
     "frames_metadata",
 ]
+"""The names of all attributes provided by TAO video sequence parsers derived from the base class."""
+
+frame_attributes = [
+    "image_data",  # image data (numpy array) that is loaded at runtime
+    "image_id",  # TAO image identifier (will be None if it does not correspond to an annotated image)
+    "frame_idx",  # 'real' (0-based) index of the frame in its parent video sequence
+    "tracks",  # dictionary of trackid-to-tracks that may have an associated annotation in this frame
+]
+"""The names of all attributes contained in TAO video frames dictionaries."""
+
+track_attributes = [
+    "category_id",  # TAO category identifier (will be None if the object is not of a known category)
+    "last_annotation_frame_idx",  # 'real' index of the latest valid annotation on this track (can be None)
+    "annotation",  # a dictionary of attributes related to the annotation for this frame (if available, can be None)
+]
+"""The names of all attributes contained in a 'track' instance of a frame dictionary."""
+
+annotation_attributes = [
+    "segmentation",  # the flattened list of (x, y) coordinates of the object's bounding segment
+    "bbox",  # the (x, y, width, height) of the top-left-based bbox rectangle around the object
+    "area",  # the surface area of the annotated region
+    "iscrowd",  # boolean flags indicating whether the annotated object is a 'crowd' of such objects
+]
+"""The names of all attributes contained in an 'annotation' instance of an object track."""
 
 
 class TAOVideoParserBase:
@@ -89,7 +123,11 @@ class TAOVideoParserBase:
         # note: not all frames will be annotated! (TAO is a roughly 1-annotated-FPS dataset)
         return len(self.frames_metadata)
 
-    def _load_frame_data(self, frame_data: typing.Dict[typing.AnyStr, typing.Any]):
+    def _load_frame_data(
+        self,
+        frame_idx: int,
+        frame_dict: typing.Dict[typing.AnyStr, typing.Any],
+    ):
         """Loads all data that is not already in the 'metadata' package for a particular frame."""
         raise NotImplementedError  # must be implemented in the derived class
 
@@ -99,6 +137,6 @@ class TAOVideoParserBase:
             frame_idx = len(self) - frame_idx
         assert 0 <= frame_idx < len(self)
         # the metadata for the frame is all ready, we just need to load the image data itself
-        frame_data = copy.deepcopy(self.frames_metadata[frame_idx])
-        self._load_frame_data(frame_data)
-        return frame_data
+        frame_dict = copy.deepcopy(self.frames_metadata[frame_idx])
+        self._load_frame_data(frame_idx=frame_idx, frame_dict=frame_dict)
+        return frame_dict

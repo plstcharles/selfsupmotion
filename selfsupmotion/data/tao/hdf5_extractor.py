@@ -20,8 +20,6 @@ import selfsupmotion.utils.logging_utils as logging_utils
 
 logger = logging.getLogger(__name__)
 
-supported_compression_types = ["jpg", "gzip", "lzf", "none", None]  # add lz4? add a video codec?
-
 
 def _write_hdf5(
     hdf5_output_path: typing.AnyStr,
@@ -30,7 +28,7 @@ def _write_hdf5(
     export_only_annot_frames: bool,
     compression_type: typing.AnyStr,
 ):
-    assert compression_type in supported_compression_types
+    assert compression_type in tao_utils.supported_compression_types
     hdf5_tmp_path = hdf5_output_path + ".tmp"
 
     with h5py.File(hdf5_tmp_path, "w") as h5fd:
@@ -40,6 +38,8 @@ def _write_hdf5(
         h5fd.attrs["pyver"] = sys.version
         h5fd.attrs["hostname"] = socket.gethostname()
         h5fd.attrs["datetime"] = str(datetime.datetime.now())
+        h5fd.attrs["compression_type"] = compression_type
+        h5fd.attrs["video_count"] = len(dataset)
 
         metadata_out = h5fd.create_dataset(
             name="metadata",
@@ -48,20 +48,13 @@ def _write_hdf5(
         )  # will contain pickled metadata only (i.e. everything that's loaded in the constructor)
 
         for video_idx, video_parser in enumerate(dataset):
-            assert all([hasattr(video_parser, field_name) for field_name in tao_utils.video_metadata_fields])
+            assert all([hasattr(video_parser, field_name) for field_name in tao_utils.video_attributes])
             metadata_to_export = {
                 field_name: getattr(video_parser, field_name)
-                for field_name in tao_utils.video_metadata_fields
+                for field_name in tao_utils.video_attributes
             }
             metadata_out[video_idx] = np.frombuffer(json.dumps(metadata_to_export).encode(), dtype=np.uint8)
-
-            if export_only_annot_frames:
-                # we need to pre-count the number of frames with at least one non-None annotation in a track
-                frame_tracks = [list(f["tracks"].values()) for f in video_parser.frames_metadata]
-                frame_count = sum([any([t["annotation"] is not None for t in tracks]) for tracks in frame_tracks])
-            else:
-                frame_count = len(video_parser)
-
+            frame_count = len(video_parser)
             if compression_type in ["gzip", "lzf", "none", None]:
                 dataset_kwargs = dict(
                     shape=(frame_count, video_parser.height, video_parser.width, 3),
@@ -86,9 +79,6 @@ def _write_hdf5(
             curr_exported_frame_idx = 0
             for frame_idx in iterator:
                 frame_data = video_parser[frame_idx]
-                if export_only_annot_frames:
-                    if all([t["annotation"] is None for t in frame_data["tracks"].values()]):
-                        continue
                 if compression_type in ["gzip", "lzf", "none", None]:
                     frame_data_out[curr_exported_frame_idx] = frame_data["image_data"]
                 elif compression_type == "jpg":
@@ -111,20 +101,21 @@ def main():
 
     data_module = tao_data_module.TAODataModule(
         data_root_path=data_root_path,
+        use_hdf5_packages=False,
+        import_only_annot_frames=export_only_annot_frames,
         skip_private_datasets=True,
+        convert_to_rgb=False,
     )
 
     dataset_map = {
-        "train": data_module.train_video_parsers,
-        "valid": data_module.valid_video_parsers,
-        "test": data_module.test_video_parsers,
+        "train": data_module.train_parsers,
+        "valid": data_module.valid_parsers,
+        "test": data_module.test_parsers,
     }
 
     for prefix, dataset in dataset_map.items():
-        if export_only_annot_frames and prefix == "test":
-            continue
-        only_annot_str = "_subsampl" if export_only_annot_frames else ""
-        hdf5_output_path = os.path.join(data_root_path, f"tao_{prefix}{only_annot_str}.hdf5")
+        hdf5_file_name = tao_utils.get_hdf5_file_name_from_prefix(prefix, export_only_annot_frames)
+        hdf5_output_path = os.path.join(data_root_path, hdf5_file_name)
         _write_hdf5(
             hdf5_output_path=hdf5_output_path,
             dataset=dataset,
@@ -135,11 +126,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # we want to highlight how much better representations are when using temporal-pairs instead of synthetic-aug-pairs
-
-    # what % of the time is the model capable of finding the 'real' match among X candidates when the candidates come from Y frames in the future
-    # draw this as a curve: X axis = for each pair (t, t+x) at different offsets of x, Y axis = average % of correct matches found across all seqs
-
     logging.basicConfig(level=logging.INFO)
     main()
     print("all done")
