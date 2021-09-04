@@ -5,6 +5,7 @@ lightning_logs
 tensorboard
 output/
 notebooks/tmp
+results/
 # Ignore example outputs
 examples/*/output/
 datasets/
