@@ -3,8 +3,8 @@ import mlflow
 import os
 import socket
 
+import git
 from pip._internal.operations import freeze
-from git import InvalidGitRepositoryError, Repo
 from mlflow.utils.mlflow_tags import MLFLOW_RUN_NOTE
 
 logger = logging.getLogger(__name__)
@@ -39,19 +39,16 @@ class LoggerWriter:  # pragma: no cover
         pass
 
 
-def get_git_hash(script_location):  # pragma: no cover
-    """Find the git hash for the running repository.
+def get_git_hash():
+    """Returns hash of the latest commit of the current branch.
 
-    :param script_location: (str) path to the script inside the git repos we want to find.
-    :return: (str) the git hash for the repository of the provided script.
+    Returns:
+        str: git hash
     """
-    if not script_location.endswith('.py'):
-        raise ValueError('script_location should point to a python script')
-    repo_folder = os.path.dirname(script_location)
     try:
-        repo = Repo(repo_folder, search_parent_directories=True)
-        commit_hash = repo.head.commit
-    except (InvalidGitRepositoryError, ValueError):
+        repo = git.Repo(search_parent_directories=True)
+        commit_hash = repo.head.object.hexsha
+    except (git.InvalidGitRepositoryError, ValueError):
         commit_hash = 'git repository not found'
     return commit_hash
 
