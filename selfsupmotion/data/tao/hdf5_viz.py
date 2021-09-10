@@ -43,6 +43,7 @@ def main(args):
                     # print("#%02X%02X%02X" % (r(), r(), r()))
                     if track_info["annotation"]:
                         bbox = track_info["annotation"]["bbox"]
+                        bbox = [int(x) for x in bbox]
                         cv.rectangle(
                             image,
                             pt1=(bbox[0], bbox[1]),
@@ -59,7 +60,10 @@ def main(args):
                     interpolation=cv.INTER_NEAREST,
                 )
                 cv.imshow("test", image)
-                cv.waitKey(0 if got_gt else 1)
+                if args.playback:
+                    cv.waitKey(16)
+                else:
+                    cv.waitKey(0 if got_gt else 1)
 
 
 if __name__ == "__main__":
@@ -69,6 +73,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--fx", type=int, default=4)
     parser.add_argument("--fy", type=int, default=4)
+    parser.add_argument("--playback", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     main(args)
