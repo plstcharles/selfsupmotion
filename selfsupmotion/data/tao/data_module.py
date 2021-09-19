@@ -17,13 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 class TAODataModule:
-
     def __init__(
         self,
         data_root_path: typing.AnyStr,
-        use_hdf5_packages: bool,
-        import_only_annot_frames: bool,
-        skip_private_datasets: bool,
+        use_hdf5_packages: bool = True,
+        import_only_annot_frames: bool = True,
+        skip_private_datasets: bool = True,
         load_train: bool = True,
         load_valid: bool = True,
         load_test: bool = True,
@@ -36,28 +35,42 @@ class TAODataModule:
         self.use_hdf5_packages = use_hdf5_packages
         self.import_only_annot_frames = import_only_annot_frames
         self.skip_private_datasets = skip_private_datasets
-        self.load_train, self.load_valid, self.load_test = load_train, load_valid, load_test
+        self.load_train, self.load_valid, self.load_test = (
+            load_train,
+            load_valid,
+            load_test,
+        )
         self.convert_to_rgb = convert_to_rgb
         self.train_parsers, self.valid_parsers, self.test_parsers = [], [], []
         self._reload_parsers()
         logger.info("Data module ready.")
 
     def _reload_parsers(self):
-        self.train_parsers = self._create_video_parsers(prefix="train") if self.load_train else []
-        self.valid_parsers = self._create_video_parsers(prefix="valid") if self.load_valid else []
-        self.test_parsers = self._create_video_parsers(prefix="test") if self.load_test else []
-        self._verify_split_overlap((
-            self.train_parsers,
-            self.valid_parsers,
-            self.test_parsers,
-        ))
+        self.train_parsers = (
+            self._create_video_parsers(prefix="train") if self.load_train else []
+        )
+        self.valid_parsers = (
+            self._create_video_parsers(prefix="valid") if self.load_valid else []
+        )
+        self.test_parsers = (
+            self._create_video_parsers(prefix="test") if self.load_test else []
+        )
+        self._verify_split_overlap(
+            (
+                self.train_parsers,
+                self.valid_parsers,
+                self.test_parsers,
+            )
+        )
 
     def _create_video_parsers(self, prefix: typing.AnyStr):
         if self.import_only_annot_frames and prefix == "test":
             return []
         logger.info(f"Parsing {prefix} split...")
         if self.use_hdf5_packages:
-            hdf5_file_name = tao_utils.get_hdf5_file_name_from_prefix(prefix, self.import_only_annot_frames)
+            hdf5_file_name = tao_utils.get_hdf5_file_name_from_prefix(
+                prefix, self.import_only_annot_frames
+            )
             hdf5_file_path = os.path.join(self.data_root_path, hdf5_file_name)
             video_parsers = TAODataModule._create_hdf5_video_parsers(
                 hdf5_file_path=hdf5_file_path,
@@ -68,8 +81,12 @@ class TAODataModule:
         else:
             annot_root_path = os.path.join(self.data_root_path, "annotations")
             assert os.path.isdir(annot_root_path)
-            annot_file_path = os.path.join(annot_root_path, tao_utils.get_annot_file_name_from_prefix(prefix))
-            zip_file_path = os.path.join(self.data_root_path, tao_utils.get_parent_zip_name_from_prefix(prefix))
+            annot_file_path = os.path.join(
+                annot_root_path, tao_utils.get_annot_file_name_from_prefix(prefix)
+            )
+            zip_file_path = os.path.join(
+                self.data_root_path, tao_utils.get_parent_zip_name_from_prefix(prefix)
+            )
             assert zipfile.is_zipfile(zip_file_path)
             video_parsers = TAODataModule._create_raw_video_parsers(
                 data_root_path=self.data_root_path,
@@ -81,7 +98,12 @@ class TAODataModule:
                 convert_to_rgb=self.convert_to_rgb,
             )
         if not self.skip_private_datasets:
-            assert any([any([k in p.name for k in tao_utils.private_dataset_names]) for p in video_parsers])
+            assert any(
+                [
+                    any([k in p.name for k in tao_utils.private_dataset_names])
+                    for p in video_parsers
+                ]
+            )
         assert len(np.unique([v.id for v in video_parsers])) == len(video_parsers)
         return video_parsers
 
@@ -95,7 +117,9 @@ class TAODataModule:
         with h5py.File(hdf5_file_path) as h5fd:  # sneak-peek for video count
             hdf5_video_count = h5fd.attrs["video_count"]
         video_parsers = []
-        iterator = tqdm.tqdm(list(range(hdf5_video_count)), desc="Fetching HDF5 video metadata")
+        iterator = tqdm.tqdm(
+            list(range(hdf5_video_count)), desc="Fetching HDF5 video metadata"
+        )
         for video_idx in iterator:
             parser = hdf5_parser.TAOVideoParser(
                 hdf5_file_path=hdf5_file_path,
@@ -161,7 +185,9 @@ class TAODataModule:
         return video_parsers
 
     @staticmethod
-    def _verify_split_overlap(parsers: typing.Iterable[typing.Sequence[tao_utils.TAOVideoParserBase]]):
+    def _verify_split_overlap(
+        parsers: typing.Iterable[typing.Sequence[tao_utils.TAOVideoParserBase]],
+    ):
         for combo in itertools.combinations(parsers, 2):
             ids = ([parser.id for parser in combo[i]] for i in range(2))
             assert len(np.intersect1d(*ids)) == 0

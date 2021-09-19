@@ -7,6 +7,7 @@ import selfsupmotion.data.tao.data_module as tao_data_module
 
 logger = logging.getLogger(__name__)
 import argparse
+import os
 
 
 def main(args):
@@ -34,24 +35,34 @@ def main(args):
                 frame_dict = video_parser[frame_idx]
                 image = frame_dict["image_data"]
                 got_gt = False
+                video_id = video_parser.name.replace("/", "-")
+                orig_image = image.copy()
                 for tid, track_info in frame_dict["tracks"].items():
                     import random
 
                     rnd = lambda: random.randint(0, 255)
                     random.seed(int(tid))
                     r, g, b = rnd(), rnd(), rnd()
+
                     # print("#%02X%02X%02X" % (r(), r(), r()))
                     if track_info["annotation"]:
+                        object_id = f"{video_id}-{tid}_{frame_idx}"
                         bbox = track_info["annotation"]["bbox"]
                         bbox = [int(x) for x in bbox]
+                        x1, y1, w, h = bbox
+                        x2, y2 = x1 + w, y1 + h
+                        os.makedirs("tmp", exist_ok=True)
+                        crop = orig_image[y1:y2, x1:x2]
+                        cv.imwrite(os.path.join("tmp", object_id + ".jpg"), crop)
+                        got_gt = True
                         cv.rectangle(
                             image,
-                            pt1=(bbox[0], bbox[1]),
-                            pt2=(bbox[0] + bbox[2], bbox[1] + bbox[3]),
+                            pt1=(x1, y1),
+                            pt2=(x2, y2),
                             color=(r, g, b),
                             thickness=1,
                         )
-                        got_gt = True
+
                 image = cv.resize(
                     image,
                     dsize=(-1, -1),
