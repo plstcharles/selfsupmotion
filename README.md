@@ -14,6 +14,13 @@ This repository contains code used to experiment on self-supervised learning fro
 
 # Installation
 
+## 
+```
+python3 -m venv venv
+source venv/bin/activate
+pip install -e .
+```
+
 ## Notable dependencies
 
 - pytorch lighning 1.1.x (1.2.x not supported!)
