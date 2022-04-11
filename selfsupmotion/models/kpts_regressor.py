@@ -13,8 +13,11 @@ from pytorch_lightning.utilities import AMPType
 from torch.optim.optimizer import Optimizer
 
 from pl_bolts.models.self_supervised.resnets import resnet18, resnet50
-from pl_bolts.optimizers.lars_scheduling import LARSWrapper
-
+try:
+    from pl_bolts.optimizers.lars_scheduling import LARSWrapper
+    LARS_AVAILABLE = True
+except ImportError:
+    LARS_AVAILABLE=False
 logger = logging.getLogger(__name__)
 
 
@@ -228,6 +231,7 @@ class KeypointsRegressor(pl.LightningModule):
         elif self.optim == 'adam':
             optimizer = torch.optim.Adam(params, lr=self.learning_rate, weight_decay=self.weight_decay)
         if self.lars_wrapper:
+            assert LARS_AVAILABLE
             optimizer = LARSWrapper(
                 optimizer,
                 eta=0.001,  # trust coefficient

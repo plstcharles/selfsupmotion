@@ -11,8 +11,14 @@ from torch.optim.optimizer import Optimizer
 
 from pl_bolts.models.self_supervised.resnets import resnet18, resnet50
 from torchvision.models.shufflenetv2 import shufflenet_v2_x1_0
+
+from selfsupmotion.models.kpts_regressor import LARS_AVAILABLE
 #from pl_bolts.models.self_supervised.simsiam.models import SiameseArm
-from pl_bolts.optimizers.lars_scheduling import LARSWrapper
+try:
+    from pl_bolts.optimizers.lars_scheduling import LARSWrapper
+    LARS_AVAILABLE=True
+except ImportError:
+    LARS_AVAILABLE=False
 
 import torch.nn.functional as F 
 import torch.nn as nn
@@ -646,6 +652,7 @@ class SimSiam(pl.LightningModule):
             optimizer = torch.optim.Adam(params, lr=self.learning_rate, weight_decay=self.weight_decay)
 
         if self.lars_wrapper:
+            assert LARS_AVAILABLE
             optimizer = LARSWrapper(
                 optimizer,
                 eta=0.001,  # trust coefficient
